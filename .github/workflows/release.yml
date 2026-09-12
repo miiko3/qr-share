@@ -8,6 +8,9 @@ on:
         required: true
         default: "1.0.0"
 
+permissions:
+  contents: write
+
 jobs:
   android:
     runs-on: ubuntu-latest
