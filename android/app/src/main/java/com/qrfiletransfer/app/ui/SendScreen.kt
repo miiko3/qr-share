@@ -114,7 +114,9 @@ fun SendScreen(onBack: () -> Unit) {
             finished = true
             return@LaunchedEffect
         }
-        delay(speedMs.toLong())
+        // Заголовок показываем дольше, чтобы получатель успел его считать.
+        val delayMs = if (currentIndex == 0) maxOf(speedMs.toLong(), 3000L) else speedMs.toLong()
+        delay(delayMs)
         currentIndex++
     }
 

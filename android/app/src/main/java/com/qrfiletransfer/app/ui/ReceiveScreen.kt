@@ -3,6 +3,7 @@ package com.qrfiletransfer.app.ui
 import android.Manifest
 import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -15,6 +16,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -55,6 +57,11 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.common.InputImage
+import com.google.zxing.BinaryBitmap
+import com.google.zxing.DecodeHintType
+import com.google.zxing.PlanarYUVLuminanceSource
+import com.google.zxing.common.HybridBinarizer
+import com.google.zxing.qrcode.QRCodeReader
 import com.qrfiletransfer.app.QrProtocol
 import java.io.File
 import java.util.concurrent.Executors
@@ -97,6 +104,9 @@ fun ReceiveScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     val sessions = remember { HashMap<String, ReceiveSession>() }
+    val stateLock = remember { Any() }
+    // Фрагменты, пришедшие раньше своего заголовка (ожидают сессию).
+    val pending = remember { HashMap<String, MutableList<QrProtocol.Chunk>>() }
 
     val cameraAlreadyGranted = ContextCompat.checkSelfPermission(
         context, Manifest.permission.CAMERA
@@ -118,13 +128,17 @@ fun ReceiveScreen(onBack: () -> Unit) {
 
     fun handle(text: String) {
         QrProtocol.parseHeader(text)?.let { h ->
-            val s = sessions[h.sid]
-            if (s == null) {
-                sessions[h.sid] = ReceiveSession(h)
+            val ns = synchronized(stateLock) {
+                sessions[h.sid] ?: ReceiveSession(h).also { sessions[h.sid] = it }
+            }
+            // Применяем фрагменты, попавшие в буфер до заголовка.
+            val buffered = synchronized(pending) { pending.remove(h.sid) ?: emptyList() }
+            buffered.forEach { c ->
+                if (c.crc == QrProtocol.crc32(c.bytes)) ns.add(c)
             }
             mainHandler.post {
-                progress = 0f
-                done = 0
+                progress = if (h.total == 0) 0f else ns.count.toFloat() / h.total
+                done = ns.count
                 total = h.total
                 info = "Получение: ${h.name} • ${h.total} частей"
                 failInfo = null
@@ -137,20 +151,29 @@ fun ReceiveScreen(onBack: () -> Unit) {
 
         val chunk = QrProtocol.parseChunk(text) ?: return
         val sid = chunk.sid
-        val s = sessions[sid] ?: return
+        val s = synchronized(stateLock) { sessions[sid] }
+        if (s == null) {
+            // Заголовок ещё не считан — держим фрагмент в буфере.
+            synchronized(pending) {
+                val list = pending.getOrPut(sid) { mutableListOf() }
+                list.add(chunk)
+                if (list.size > 5000) list.removeAt(0)
+            }
+            return
+        }
         if (chunk.crc != QrProtocol.crc32(chunk.bytes)) return
-
-        val newlyAdded = s.add(chunk)
-        if (!newlyAdded) return
+        val added = synchronized(stateLock) { s.add(chunk) }
+        if (!added) return
+        val count = s.count
 
         mainHandler.post {
-            done = s.count
-            progress = s.count.toFloat() / s.header.total
+            done = count
+            progress = count.toFloat() / s.header.total
             scanStatus = ScanStatus.Reading
             lastActivity = System.currentTimeMillis()
         }
 
-        if (s.count == s.header.total) {
+        if (count == s.header.total) {
             val full = s.assemble()
             if (QrProtocol.sha256Hex(full) != s.header.sha256) {
                 mainHandler.post { failInfo = "Контрольная сумма не совпала. Отправьте файл заново." }
@@ -166,6 +189,7 @@ fun ReceiveScreen(onBack: () -> Unit) {
                             else -> "Загрузки"
                         }
                         scanStatus = ScanStatus.Success
+                        openSavedFile(context, saved)
                     } else {
                         failInfo = "Не удалось сохранить файл"
                     }
@@ -349,8 +373,13 @@ private fun CameraPreview(
                 val input = InputImage.fromMediaImage(mediaImage, image.imageInfo.rotationDegrees)
                 scanner.process(input)
                     .addOnSuccessListener { barcodes ->
-                        for (b in barcodes) {
-                            b.rawValue?.let(onBarcode)
+                        if (barcodes.isEmpty()) {
+                            // ML Kit не увидел QR — пробуем запасной декодер по центру кадра.
+                            zxingDecode(image)?.let(onBarcode)
+                        } else {
+                            for (b in barcodes) {
+                                b.rawValue?.let(onBarcode)
+                            }
                         }
                     }
                     .addOnCompleteListener { image.close() }
@@ -436,5 +465,59 @@ private fun saveReceived(context: Context, bytes: ByteArray, name: String, mime:
         } catch (e: Exception) {
             null
         }
+    }
+}
+
+/** Запасной декодер (ZXing) по центральной области кадра — когда ML Kit ничего не нашёл. */
+private fun zxingDecode(image: ImageProxy): String? {
+    return try {
+        val plane = image.planes[0]
+        val buffer = plane.buffer
+        val rowStride = plane.rowStride
+        val pixelStride = plane.pixelStride
+        val width = image.width
+        val height = image.height
+
+        val yuv = ByteArray(rowStride * height)
+        buffer.rewind()
+        buffer.get(yuv)
+        if (pixelStride != 1) {
+            for (row in 0 until height) {
+                var col = 0
+                while (col < width) {
+                    yuv[row * rowStride + col] = yuv[row * rowStride + col * pixelStride]
+                    col++
+                }
+            }
+        }
+
+        val cropW = (width * 0.6).toInt().coerceAtLeast(64)
+        val cropH = (height * 0.6).toInt().coerceAtLeast(64)
+        val left = (width - cropW) / 2
+        val top = (height - cropH) / 2
+
+        val source = PlanarYUVLuminanceSource(
+            yuv, rowStride, height, left, top, cropW, cropH, false
+        )
+        val result = QRCodeReader().decode(
+            BinaryBitmap(HybridBinarizer(source)),
+            mapOf(DecodeHintType.CHARACTER_SET to "UTF-8")
+        )
+        result.text
+    } catch (e: Exception) {
+        null
+    }
+}
+
+/** Открывает полученный файл в подходящем приложении (галерея/просмотрщик). */
+private fun openSavedFile(context: Context, uri: Uri) {
+    try {
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, context.contentResolver.getType(uri) ?: "*/*")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(intent)
+    } catch (e: Exception) {
+        // нет приложения-просмотрщика — достаточно сообщения об успехе
     }
 }

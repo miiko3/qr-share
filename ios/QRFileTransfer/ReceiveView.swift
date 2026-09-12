@@ -1,6 +1,7 @@
 import SwiftUI
 import AVFoundation
 import Photos
+import QuickLook
 
 enum ScanState {
     case idle, reading, interrupted, success
@@ -158,6 +159,7 @@ struct ReceiveView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var store = SessionStore()
     @State private var granted = false
+    @State private var showPreview = false
 
     private var statusText: String {
         switch store.state {
@@ -294,6 +296,14 @@ struct ReceiveView: View {
                 store.refreshInterruption()
             }
         }
+        .onChange(of: store.savedURL) { url in
+            if url != nil { showPreview = true }
+        }
+        .sheet(isPresented: $showPreview) {
+            if let url = store.savedURL {
+                QuickLookView(url: url)
+            }
+        }
     }
 
     private func requestPermission() {
@@ -306,6 +316,38 @@ struct ReceiveView: View {
             }
         default:
             granted = false
+        }
+    }
+}
+
+/// Быстрый предпросмотр полученного файла (QLPreviewController).
+private struct QuickLookView: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeCoordinator() -> Coordinator { Coordinator(url) }
+
+    func makeUIViewController(context: Context) -> UINavigationController {
+        let controller = QLPreviewController()
+        controller.dataSource = context.coordinator
+        context.coordinator.controller = controller
+        return UINavigationController(rootViewController: controller)
+    }
+
+    func updateUIViewController(_ uiViewController: UINavigationController, context: Context) {}
+
+    final class Coordinator: NSObject, QLPreviewControllerDataSource {
+        let url: URL
+        weak var controller: QLPreviewController?
+
+        init(_ url: URL) { self.url = url }
+
+        func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
+
+        func previewController(
+            _ controller: QLPreviewController,
+            previewItemAt index: Int
+        ) -> QLPreviewItem {
+            url as NSURL
         }
     }
 }
