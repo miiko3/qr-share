@@ -2,7 +2,6 @@ import SwiftUI
 import UIKit
 import AVFoundation
 import Vision
-import ImageIO
 import CoreVideo
 
 final class PreviewContainerView: UIView {
@@ -62,30 +61,16 @@ final class CameraScannerCoordinator: NSObject, AVCaptureVideoDataOutputSampleBu
         didOutput sampleBuffer: CMSampleBuffer,
         from connection: AVCaptureConnection
     ) {
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        let request = VNDetectBarcodesRequest()
-        request.symbologies = [.qr]
-        let orientation = Self.imageOrientation(from: UIDevice.current.orientation)
-        let handler = VNImageRequestHandler(
-            cvPixelBuffer: pixelBuffer,
-            orientation: orientation,
-            options: [:]
-        )
-        try? handler.perform([request])
-        for observation in request.results ?? [] {
-            guard let payload = observation.payloadStringValue, !payload.isEmpty else { continue }
-            onBarcode(payload)
-        }
-    }
-
-    private static func imageOrientation(
-        from deviceOrientation: UIDeviceOrientation
-    ) -> CGImagePropertyOrientation {
-        switch deviceOrientation {
-        case .portraitUpsideDown: return .left
-        case .landscapeLeft: return .up
-        case .landscapeRight: return .down
-        default: return .right
+        autoreleasepool {
+            guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+            let request = VNDetectBarcodesRequest()
+            request.symbologies = [.qr]
+            let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, options: [:])
+            try? handler.perform([request])
+            for observation in request.results ?? [] {
+                guard let payload = observation.payloadStringValue, !payload.isEmpty else { continue }
+                onBarcode(payload)
+            }
         }
     }
 }

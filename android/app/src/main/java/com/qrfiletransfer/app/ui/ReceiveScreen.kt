@@ -10,8 +10,8 @@ import android.os.Build
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.MediaStore
-import android.util.Size
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
@@ -70,6 +70,10 @@ import kotlinx.coroutines.delay
 /** Статус сканирования для подсказок пользователю. */
 private enum class ScanStatus { Idle, Reading, Interrupted, Success }
 
+/** Ограничитель частоты запасного декодера (не чаще раза в 300 мс). */
+@Volatile
+private var lastZxingTs = 0L
+
 /** Собирает части одного файла, полученные из QR-кодов. */
 private class ReceiveSession(val header: QrProtocol.Header) {
     val parts = arrayOfNulls<ByteArray>(header.total)
@@ -127,7 +131,8 @@ fun ReceiveScreen(onBack: () -> Unit) {
     var lastActivity by remember { mutableStateOf(0L) }
 
     fun handle(text: String) {
-        QrProtocol.parseHeader(text)?.let { h ->
+        try {
+            QrProtocol.parseHeader(text)?.let { h ->
             val ns = synchronized(stateLock) {
                 sessions[h.sid] ?: ReceiveSession(h).also { sessions[h.sid] = it }
             }
@@ -195,6 +200,9 @@ fun ReceiveScreen(onBack: () -> Unit) {
                     }
                 }
             }
+        }
+        } catch (e: Exception) {
+            // Сбой обработки кадра не должен ронять приложение.
         }
     }
 
@@ -351,7 +359,6 @@ private fun CameraPreview(
     val analysis = remember {
         ImageAnalysis.Builder()
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-            .setTargetResolution(Size(1280, 720))
             .build()
     }
     val scanner = remember { BarcodeScanning.getClient() }
@@ -371,18 +378,26 @@ private fun CameraPreview(
                     return@setAnalyzer
                 }
                 val input = InputImage.fromMediaImage(mediaImage, image.imageInfo.rotationDegrees)
-                scanner.process(input)
-                    .addOnSuccessListener { barcodes ->
-                        if (barcodes.isEmpty()) {
-                            // ML Kit не увидел QR — пробуем запасной декодер по центру кадра.
-                            zxingDecode(image)?.let(onBarcode)
-                        } else {
-                            for (b in barcodes) {
-                                b.rawValue?.let(onBarcode)
+                try {
+                    scanner.process(input)
+                        .addOnSuccessListener { barcodes ->
+                            if (barcodes.isEmpty()) {
+                                // ML Kit не увидел QR — пробуем запасной декодер (не чаще раза в 300 мс).
+                                val now = SystemClock.elapsedRealtime()
+                                if (now - lastZxingTs > 300) {
+                                    lastZxingTs = now
+                                    zxingDecode(image)?.let(onBarcode)
+                                }
+                            } else {
+                                for (b in barcodes) {
+                                    b.rawValue?.let(onBarcode)
+                                }
                             }
                         }
-                    }
-                    .addOnCompleteListener { image.close() }
+                        .addOnCompleteListener { image.close() }
+                } catch (e: Exception) {
+                    image.close()
+                }
             }
             try {
                 provider.unbindAll()
@@ -479,6 +494,7 @@ private fun zxingDecode(image: ImageProxy): String? {
         val height = image.height
 
         val yuv = ByteArray(rowStride * height)
+        if (buffer.remaining() < rowStride * height) return null
         buffer.rewind()
         buffer.get(yuv)
         if (pixelStride != 1) {

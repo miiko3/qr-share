@@ -131,7 +131,13 @@ fun SendScreen(onBack: () -> Unit) {
             }
         }
     }
-    val qrBitmap = remember(qrText) { qrText?.let { QrGenerator.encode(it) } }
+    val qrBitmap = remember(qrText) {
+        try {
+            qrText?.let { QrGenerator.encode(it) }
+        } catch (e: Exception) {
+            null
+        }
+    }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val qrSize = (maxWidth - 48.dp).coerceAtLeast(120.dp)
