@@ -39,7 +39,7 @@ jobs:
         run: |
           gh release create "$VERSION" \
             --title "QR Share ${{ inputs.version }}" \
-            --notes "Автоматический релиз. APK идёт следом в шаге iOS-джоба." \
+            --notes "Автоматический релиз. Android: app-release.apk. iOS: QRFileTransfer-iOS-device.ipa (для Sideloadly)." \
             android/app/build/outputs/apk/release/app-release.apk
 
   ios:
@@ -55,22 +55,26 @@ jobs:
         working-directory: ios
         run: xcodegen generate
 
-      - name: Build app for iOS Simulator
+      - name: Build unsigned iOS app for device (ipa)
         working-directory: ios
         run: |
           xcodebuild \
             -project QRFileTransfer.xcodeproj \
             -scheme QRFileTransfer \
             -configuration Release \
-            -destination 'generic/platform=iOS Simulator' \
+            -destination 'generic/platform=iOS' \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             build
-          cd build/Build/Products/Release-iphonesimulator && zip -r QRFileTransfer-iOS-simulator.zip QRFileTransfer.app
+          cd build/Build/Products/Release-iphoneos
+          rm -rf Payload
+          mkdir -p Payload
+          cp -R QRFileTransfer.app Payload/
+          zip -r QRFileTransfer-iOS-device.ipa Payload
 
-      - name: Upload iOS app to release
+      - name: Upload iOS ipa to release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: v${{ inputs.version }}
         run: |
-          gh release upload "$VERSION" ios/build/Build/Products/Release-iphonesimulator/QRFileTransfer-iOS-simulator.zip
+          gh release upload "$VERSION" ios/build/Build/Products/Release-iphoneos/QRFileTransfer-iOS-device.ipa

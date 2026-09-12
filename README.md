@@ -79,9 +79,23 @@ cd android
 
 1. Загрузите код на GitHub (просто `git push`)
 2. Откройте вкладку **Actions** → `Build iOS`
-3. Скачайте артефакт `ios-app` (это `.app` для симулятора, без подписи)
+3. Скачайте артефакт `ios-app` (проверка сборки)
 
-Для релиза в App Store нужен Apple Developer аккаунт и подпись — настройка описана в `ios/README.md`.
+### Установка iOS на iPhone через Sideloadly (без App Store)
+
+Релизы содержат файл `QRFileTransfer-iOS-device.ipa` — сборка для реальных устройств
+(**без подписи**). Sideloadly подпишет её твоим бесплатным Apple ID прямо на компьютере.
+
+1. Скачайте [Sideloadly](https://sideloadly.io) для Windows или macOS
+2. Скачайте `QRFileTransfer-iOS-device.ipa` из последнего релиза
+3. Подключите iPhone к компьютеру кабелем
+4. На iPhone: **Настройки → Основные → Режим разработчика** — включите (iOS 16+)
+5. Откройте Sideloadly, выберите `.ipa`, введите Apple ID (или app-specific password)
+6. Нажмите **Install**
+
+Бесплатный Apple ID: приложение действительно **7 суток**, затем нужно переустановить.
+Для постоянной подписи (на год) нужен платный Apple Developer аккаунт — тогда подпись
+настраивается в Xcode на Mac, инструкция в `ios/README.md`.
 
 ## Использование
 
