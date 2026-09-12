@@ -1,0 +1,29 @@
+name: QRFileTransfer
+options:
+  bundleIdPrefix: com.qrfiletransfer
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+targets:
+  QRFileTransfer:
+    type: application
+    platform: iOS
+    sources:
+      - path: QRFileTransfer
+        excludes:
+          - Info.plist
+    info:
+      path: QRFileTransfer/Info.plist
+      properties:
+        UILaunchScreen: {}
+        NSCameraUsageDescription: "Нужен доступ к камере для сканирования QR-кодов"
+        CFBundleDisplayName: QR Share
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+schemes:
+  QRFileTransfer:
+    build:
+      targets:
+        QRFileTransfer: all
+    run:
+      config: Debug

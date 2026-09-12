@@ -1,0 +1,37 @@
+name: Build iOS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: ios
+        run: xcodegen generate
+
+      - name: Build app for iOS Simulator (no signing)
+        working-directory: ios
+        run: |
+          xcodebuild \
+            -project QRFileTransfer.xcodeproj \
+            -scheme QRFileTransfer \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Upload .app
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-app
+          path: ios/build/Build/Products/Debug-iphonesimulator/QRFileTransfer.app

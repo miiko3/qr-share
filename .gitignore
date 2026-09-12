@@ -1,0 +1,21 @@
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/captures/
+android/.kotlin/
+*.iml
+
+# iOS / Xcode
+ios/build/
+ios/DerivedData/
+xcuserdata/
+*.xcuserdatad
+*.xcuserstate
+.idea/
+.DS_Store
+
+# macOS
+.DS_Store

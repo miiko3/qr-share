@@ -1,0 +1,1 @@
+# Keep ML Kit and CameraX rules as provided by the libraries.
