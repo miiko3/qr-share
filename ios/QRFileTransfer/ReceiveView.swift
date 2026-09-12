@@ -2,7 +2,7 @@ import SwiftUI
 import AVFoundation
 import Photos
 
-private enum ScanState {
+enum ScanState {
     case idle, reading, interrupted, success
 }
 
