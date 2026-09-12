@@ -1,25 +1,33 @@
 package com.qrfiletransfer.app.ui
 
+import android.Manifest
 import android.content.ContentValues
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -80,7 +88,14 @@ fun ReceiveScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     val sessions = remember { HashMap<String, ReceiveSession>() }
-    val currentSessionId = remember { arrayOfNulls<String>(1) }
+
+    val cameraAlreadyGranted = ContextCompat.checkSelfPermission(
+        context, Manifest.permission.CAMERA
+    ) == PackageManager.PERMISSION_GRANTED
+    var cameraGranted by remember { mutableStateOf(cameraAlreadyGranted) }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted -> cameraGranted = granted }
 
     var progress by remember { mutableStateOf(0f) }
     var done by remember { mutableStateOf(0) }
@@ -95,7 +110,6 @@ fun ReceiveScreen(onBack: () -> Unit) {
             if (s == null) {
                 val ns = ReceiveSession(h)
                 sessions[h.sid] = ns
-                currentSessionId[0] = h.sid
             }
             mainHandler.post {
                 progress = 0f
@@ -148,15 +162,42 @@ fun ReceiveScreen(onBack: () -> Unit) {
         }
 
         Box(Modifier.fillMaxSize()) {
-            CameraPreview(
-                modifier = Modifier.fillMaxSize(),
-                onBarcode = ::handle
-            )
+            if (cameraGranted) {
+                CameraPreview(
+                    modifier = Modifier.fillMaxSize(),
+                    onBarcode = ::handle
+                )
+            } else {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        "Камера выключена. Для приёма файлов дайте доступ к камере.",
+                        style = MaterialTheme.typography.titleMedium,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.size(16.dp))
+                    Button(onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }) {
+                        Text("Разрешить доступ к камере")
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "Если кнопка не помогла, включите камеру в настройках приложения.",
+                        style = MaterialTheme.typography.bodySmall,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
 
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
+                    .widthIn(max = 520.dp)
                     .padding(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {

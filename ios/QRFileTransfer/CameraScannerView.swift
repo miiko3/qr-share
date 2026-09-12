@@ -2,6 +2,8 @@ import SwiftUI
 import UIKit
 import AVFoundation
 import Vision
+import ImageIO
+import CoreVideo
 
 final class PreviewContainerView: UIView {
     var previewLayer: AVCaptureVideoPreviewLayer?
@@ -9,11 +11,17 @@ final class PreviewContainerView: UIView {
         super.layoutSubviews()
         previewLayer?.frame = bounds
     }
+    deinit {
+        if let session = previewLayer?.session, session.isRunning {
+            session.stopRunning()
+        }
+    }
 }
 
 final class CameraScannerCoordinator: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     private let onBarcode: (String) -> Void
     private let queue = DispatchQueue(label: "scan.queue", qos: .userInitiated)
+    private var session: AVCaptureSession?
 
     init(onBarcode: @escaping (String) -> Void) {
         self.onBarcode = onBarcode
@@ -21,6 +29,8 @@ final class CameraScannerCoordinator: NSObject, AVCaptureVideoDataOutputSampleBu
 
     func start(in view: PreviewContainerView) {
         let session = AVCaptureSession()
+        session.sessionPreset = .hd1280x720
+        self.session = session
         guard let device = AVCaptureDevice.default(for: .video),
               let input = try? AVCaptureDeviceInput(device: device),
               session.canAddInput(input) else { return }
@@ -28,6 +38,9 @@ final class CameraScannerCoordinator: NSObject, AVCaptureVideoDataOutputSampleBu
 
         let output = AVCaptureVideoDataOutput()
         output.alwaysDiscardsLateVideoFrames = true
+        output.videoSettings = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+        ]
         guard session.canAddOutput(output) else { return }
         session.addOutput(output)
         output.setSampleBufferDelegate(self, queue: queue)
@@ -38,7 +51,10 @@ final class CameraScannerCoordinator: NSObject, AVCaptureVideoDataOutputSampleBu
         view.previewLayer = layer
         view.layer.addSublayer(layer)
 
-        session.startRunning()
+        queue.async {
+            guard !session.isRunning else { return }
+            session.startRunning()
+        }
     }
 
     func captureOutput(
@@ -49,11 +65,27 @@ final class CameraScannerCoordinator: NSObject, AVCaptureVideoDataOutputSampleBu
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let request = VNDetectBarcodesRequest()
         request.symbologies = [.qr]
-        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, options: [:])
+        let orientation = Self.imageOrientation(from: UIDevice.current.orientation)
+        let handler = VNImageRequestHandler(
+            cvPixelBuffer: pixelBuffer,
+            orientation: orientation,
+            options: [:]
+        )
         try? handler.perform([request])
         for observation in request.results ?? [] {
             guard let payload = observation.payloadStringValue, !payload.isEmpty else { continue }
             onBarcode(payload)
+        }
+    }
+
+    private static func imageOrientation(
+        from deviceOrientation: UIDeviceOrientation
+    ) -> CGImagePropertyOrientation {
+        switch deviceOrientation {
+        case .portraitUpsideDown: return .left
+        case .landscapeLeft: return .up
+        case .landscapeRight: return .down
+        default: return .right
         }
     }
 }

@@ -118,12 +118,24 @@ struct ReceiveView: View {
             .padding(.horizontal)
 
             ZStack {
-                CameraScannerView { text in store.handle(text) }
+                if granted {
+                    CameraScannerView { text in store.handle(text) }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    VStack(spacing: 16) {
+                        Text("Для приёма файлов нужен доступ к камере.")
+                            .multilineTextAlignment(.center)
+                        Button("Разрешить доступ к камере") { requestPermission() }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.large)
+                        Text("Если кнопка не помогла — включите камеру в настройках приложения.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: 420)
+                    .padding()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                if !granted {
-                    Text("Нет доступа к камере. Разрешите доступ в настройках.")
-                        .foregroundStyle(.red)
                 }
 
                 VStack {
@@ -133,6 +145,7 @@ struct ReceiveView: View {
                             value: Double(min(store.done, store.total)),
                             total: Double(store.total)
                         )
+                        .frame(maxWidth: 480)
                         Text("Принято частей: \(store.done) / \(store.total)")
                             .font(.caption)
                     }
@@ -168,9 +181,20 @@ struct ReceiveView: View {
         .padding(.vertical)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
+            requestPermission()
+        }
+    }
+
+    private func requestPermission() {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            granted = true
+        case .notDetermined:
             AVCaptureDevice.requestAccess(for: .video) { ok in
                 DispatchQueue.main.async { granted = ok }
             }
+        default:
+            granted = false
         }
     }
 }

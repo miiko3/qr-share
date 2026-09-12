@@ -19,6 +19,8 @@ targets:
         UILaunchScreen: {}
         NSCameraUsageDescription: "Нужен доступ к камере для сканирования QR-кодов"
         CFBundleDisplayName: QR Share
+        CFBundleShortVersionString: "1.2.0"
+        CFBundleVersion: "12"
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
 schemes:

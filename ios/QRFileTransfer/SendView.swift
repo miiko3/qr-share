@@ -1,9 +1,11 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import PhotosUI
 
 struct SendView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showPicker = false
+    @State private var photosItem: PhotosPickerItem?
     @State private var fileName = ""
     @State private var fileInfo = ""
     @State private var qrTexts: [String] = []
@@ -15,69 +17,88 @@ struct SendView: View {
     @State private var qrImage: UIImage?
 
     var body: some View {
-        VStack(spacing: 16) {
-            HStack {
-                Button("← Назад") { dismiss() }
-                Spacer()
-                Text("Отправка").font(.headline)
-                Spacer()
-            }
-            .padding(.horizontal)
+        GeometryReader { geo in
+            let qrSize = max(min(geo.size.width - 48, 340), 120)
+            VStack(spacing: 16) {
+                HStack {
+                    Button("← Назад") { dismiss() }
+                    Spacer()
+                    Text("Отправка").font(.headline)
+                    Spacer()
+                }
+                .padding(.horizontal)
 
-            if qrTexts.isEmpty {
-                VStack(spacing: 20) {
-                    Text("Выберите файл для отправки (до 100 МБ).\nПоднесите телефоны друг к другу.")
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(.secondary)
-                    Button("Выбрать файл") { showPicker = true }
+                if qrTexts.isEmpty {
+                    VStack(spacing: 12) {
+                        Text("Выберите, что отправить (до 100 МБ).\nПоднесите телефоны друг к другу.")
+                            .multilineTextAlignment(.center)
+                            .foregroundStyle(.secondary)
+                        PhotosPicker(
+                            selection: $photosItem,
+                            matching: .any(of: [.images, .videos])
+                        ) {
+                            Label("Галерея (фото/видео)", systemImage: "photo.on.rectangle")
+                                .frame(maxWidth: .infinity)
+                        }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.large)
-                    if let error {
-                        Text(error).foregroundStyle(.red)
+                        Button {
+                            showPicker = true
+                        } label: {
+                            Label("Файловый менеджер", systemImage: "folder")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.large)
+                        if let error {
+                            Text(error).foregroundStyle(.red)
+                        }
                     }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                Text(fileName).lineLimit(1).font(.title3)
+                    .frame(maxWidth: 420)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    Text(fileName).lineLimit(1).font(.title3)
 
-                if let qrImage {
-                    Image(uiImage: qrImage)
-                        .resizable()
-                        .interpolation(.none)
-                        .scaledToFit()
-                        .frame(width: 300, height: 300)
-                }
-                Spacer()
-
-                ProgressView(
-                    value: Double(min(index, totalSteps)),
-                    total: Double(totalSteps)
-                )
-                Text("Часть \(min(index, totalSteps)) из \(totalSteps) • \(progressPercent)%")
-                    .font(.caption)
-
-                HStack {
-                    Button(playing ? "Пауза" : "Продолжить") { playing.toggle() }
+                    if let qrImage {
+                        Image(uiImage: qrImage)
+                            .resizable()
+                            .interpolation(.none)
+                            .scaledToFit()
+                            .frame(width: qrSize, height: qrSize)
+                    }
                     Spacer()
-                    if finished {
-                        Button("Заново") { reset() }
+
+                    ProgressView(
+                        value: Double(min(index, totalSteps)),
+                        total: Double(totalSteps)
+                    )
+                    .frame(maxWidth: 480)
+                    Text("Часть \(min(index, totalSteps)) из \(totalSteps) • \(progressPercent)%")
+                        .font(.caption)
+
+                    HStack {
+                        Button(playing ? "Пауза" : "Продолжить") { playing.toggle() }
+                        Spacer()
+                        if finished {
+                            Button("Заново") { reset() }
+                        }
                     }
-                }
 
-                HStack {
-                    Text("Скорость")
-                    Slider(value: $speedMs, in: 150...2000, step: 50)
-                    Text("\(Int(speedMs)) мс")
-                }
+                    HStack {
+                        Text("Скорость")
+                        Slider(value: $speedMs, in: 150...2000, step: 50)
+                        Text("\(Int(speedMs)) мс")
+                    }
 
-                if finished {
-                    Text("Готово! Все части показаны. Проверьте, что получатель собрал файл.")
-                        .foregroundStyle(.green)
+                    if finished {
+                        Text("Готово! Все части показаны. Проверьте, что получатель собрал файл.")
+                            .foregroundStyle(.green)
+                    }
+                    Text(fileInfo).font(.caption).foregroundStyle(.secondary)
                 }
-                Text(fileInfo).font(.caption).foregroundStyle(.secondary)
             }
+            .padding(.vertical)
         }
-        .padding(.vertical)
         .navigationBarTitleDisplayMode(.inline)
         .fileImporter(
             isPresented: $showPicker,
@@ -86,6 +107,10 @@ struct SendView: View {
             if case .success(let url) = result {
                 load(url)
             }
+        }
+        .onChange(of: photosItem) { item in
+            guard let item else { return }
+            loadFromPhotos(item)
         }
         .task(id: playing) {
             guard playing, index < qrTexts.count else { return }
@@ -119,50 +144,68 @@ struct SendView: View {
         defer { if accessing { url.stopAccessingSecurityScopedResource() } }
         do {
             let data = try Data(contentsOf: url)
-            guard data.count > 0 else {
-                error = "Пустой файл"
-                return
-            }
-            guard data.count <= QrProtocol.maxFileSize else {
-                error = "Файл больше 100 МБ"
-                return
-            }
             let name = url.lastPathComponent.isEmpty ? "file" : url.lastPathComponent
-            let sid = QrProtocol.newSessionId()
-            let total = QrProtocol.chunkCount(for: Int64(data.count))
-            let sha = QrProtocol.sha256Hex(data)
-
-            let header = QrProtocol.buildHeader(
-                sid: sid,
-                name: name,
-                mime: "application/octet-stream",
-                size: Int64(data.count),
-                sha: sha,
-                total: total
-            )
-
-            var texts: [String] = [header]
-            for i in 1...total {
-                let from = (i - 1) * QrProtocol.chunkRawSize
-                let to = min(from + QrProtocol.chunkRawSize, data.count)
-                let slice = data.subdata(in: from..<to)
-                texts.append(QrProtocol.buildData(
-                    sid: sid,
-                    index: i,
-                    raw: slice,
-                    crc: QrProtocol.crc32Value(slice)
-                ))
-            }
-            qrTexts = texts
-            fileName = name
-            fileInfo = "\(data.count / 1024) КБ • \(total) частей"
-            index = 0
-            finished = false
-            error = nil
-            playing = true
+            start(data: data, name: name)
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    private func loadFromPhotos(_ item: PhotosPickerItem) {
+        item.loadTransferable(type: Data.self) { result in
+            switch result {
+            case .success(let data):
+                guard let data else { return }
+                let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "jpg"
+                let name = "Фото_\(Int(Date().timeIntervalSince1970)).\(ext)"
+                start(data: data, name: name)
+            case .failure(let e):
+                self.error = e.localizedDescription
+            }
+        }
+    }
+
+    private func start(data: Data, name: String) {
+        guard data.count > 0 else {
+            error = "Пустой файл"
+            return
+        }
+        guard data.count <= QrProtocol.maxFileSize else {
+            error = "Файл больше 100 МБ"
+            return
+        }
+        let sid = QrProtocol.newSessionId()
+        let total = QrProtocol.chunkCount(for: Int64(data.count))
+        let sha = QrProtocol.sha256Hex(data)
+
+        let header = QrProtocol.buildHeader(
+            sid: sid,
+            name: name,
+            mime: "application/octet-stream",
+            size: Int64(data.count),
+            sha: sha,
+            total: total
+        )
+
+        var texts: [String] = [header]
+        for i in 1...total {
+            let from = (i - 1) * QrProtocol.chunkRawSize
+            let to = min(from + QrProtocol.chunkRawSize, data.count)
+            let slice = data.subdata(in: from..<to)
+            texts.append(QrProtocol.buildData(
+                sid: sid,
+                index: i,
+                raw: slice,
+                crc: QrProtocol.crc32Value(slice)
+            ))
+        }
+        qrTexts = texts
+        fileName = name
+        fileInfo = "\(data.count / 1024) КБ • \(total) частей"
+        index = 0
+        finished = false
+        error = nil
+        playing = true
     }
 
     private func reset() {

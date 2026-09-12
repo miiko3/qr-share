@@ -13,12 +13,16 @@ struct ContentView: View {
                 NavigationLink("Отправить файл") { SendView() }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
+                    .frame(maxWidth: .infinity)
 
                 NavigationLink("Принять файл") { ReceiveView() }
                     .buttonStyle(.bordered)
                     .controlSize(.large)
+                    .frame(maxWidth: .infinity)
             }
             .padding()
+            .frame(maxWidth: 480)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .navigationTitle("Главная")
         }
     }

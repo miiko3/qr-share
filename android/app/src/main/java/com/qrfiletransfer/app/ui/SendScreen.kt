@@ -1,9 +1,11 @@
 package com.qrfiletransfer.app.ui
 
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -14,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -52,10 +55,7 @@ fun SendScreen(onBack: () -> Unit) {
     var speedMs by remember { mutableStateOf(500) }
     var error by remember { mutableStateOf<String?>(null) }
 
-    val picker = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        uri ?: return@rememberLauncherForActivityResult
+    fun loadUri(uri: Uri) {
         try {
             val name = uri.lastPathSegment ?: "file"
             val mime = context.contentResolver.getType(uri) ?: "application/octet-stream"
@@ -93,6 +93,18 @@ fun SendScreen(onBack: () -> Unit) {
         }
     }
 
+    val filePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri -> uri?.let(::loadUri) }
+
+    val galleryPhotoPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri -> uri?.let(::loadUri) }
+
+    val galleryVideoPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri -> uri?.let(::loadUri) }
+
     // Автопрокрутка QR-кодов: показывает заголовок, затем фрагменты 1..total.
     LaunchedEffect(playing, currentIndex, chunks.size) {
         if (!playing) return@LaunchedEffect
@@ -119,110 +131,133 @@ fun SendScreen(onBack: () -> Unit) {
     }
     val qrBitmap = remember(qrText) { qrText?.let { QrGenerator.encode(it) } }
 
-    val totalSteps = chunks.size + 1
-    val progress = (currentIndex.coerceAtMost(totalSteps)).toFloat() / totalSteps
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val qrSize = (maxWidth - 48.dp).coerceAtLeast(120.dp)
+        val totalSteps = chunks.size + 1
+        val progress = (currentIndex.coerceAtMost(totalSteps)).toFloat() / totalSteps
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            OutlinedButton(onClick = onBack) { Text("← Назад") }
-            Spacer(modifier = Modifier.weight(1f))
-            Text("Отправка", style = MaterialTheme.typography.headlineSmall)
-            Spacer(modifier = Modifier.weight(1f))
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        if (qrText == null) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    "Выберите файл для отправки.\n" +
-                        "Поднесите телефоны друг к другу и отсканируйте появившиеся QR-коды.",
-                    textAlign = TextAlign.Center
-                )
-                Button(onClick = { picker.launch(arrayOf("*/*")) }) {
-                    Text("Выбрать файл")
-                }
-            }
-        } else {
-            fileName?.let { Text(it, style = MaterialTheme.typography.titleMedium) }
-            Text(fileInfo, style = MaterialTheme.typography.bodySmall)
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            qrBitmap?.let { bmp ->
-                Image(
-                    bitmap = bmp.asImageBitmap(),
-                    contentDescription = "QR-код части файла",
-                    modifier = Modifier.size(320.dp)
-                )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedButton(onClick = onBack) { Text("← Назад") }
+                Spacer(modifier = Modifier.weight(1f))
+                Text("Отправка", style = MaterialTheme.typography.headlineSmall)
+                Spacer(modifier = Modifier.weight(1f))
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            LinearProgressIndicator(
-                progress = { progress },
-                modifier = Modifier.fillMaxWidth()
-            )
-            Text(
-                "Часть ${minOf(currentIndex.coerceAtLeast(1), chunks.size)} из ${chunks.size} • " +
-                    "${(progress * 100).toInt()}%",
-                style = MaterialTheme.typography.bodySmall
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Row {
-                Button(onClick = { playing = !playing }) {
-                    Text(if (playing) "Пауза" else "Продолжить")
-                }
-                if (finished) {
-                    Spacer(modifier = Modifier.size(8.dp))
-                    Button(onClick = {
-                        headerText = null
-                        chunks = emptyList()
-                        fileName = null
-                        currentIndex = 0
-                        playing = false
-                        finished = false
-                    }) {
-                        Text("Заново")
+            if (qrText == null) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().widthIn(max = 420.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        "Выберите, что отправить.\n" +
+                            "Поднесите телефоны друг к другу и отсканируйте появившиеся QR-коды.",
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(20.dp))
+                    Button(
+                        onClick = { galleryPhotoPicker.launch("image/*") },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Фото из галереи")
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { galleryVideoPicker.launch("video/*") },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Видео из галереи")
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { filePicker.launch(arrayOf("*/*")) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Файлы (документы, музыка и др.)")
                     }
                 }
-            }
+            } else {
+                fileName?.let { Text(it, style = MaterialTheme.typography.titleMedium) }
+                Text(fileInfo, style = MaterialTheme.typography.bodySmall)
 
-            Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
-            Text(
-                "Скорость: ${speedMs.toInt()} мс на QR-код",
-                style = MaterialTheme.typography.bodySmall
-            )
-            Slider(
-                value = speedMs.toFloat(),
-                onValueChange = { speedMs = it.toInt() },
-                valueRange = 150f..2000f
-            )
+                qrBitmap?.let { bmp ->
+                    Image(
+                        bitmap = bmp.asImageBitmap(),
+                        contentDescription = "QR-код части файла",
+                        modifier = Modifier.size(qrSize)
+                    )
+                }
 
-            if (finished) {
-                Text(
-                    "Готово! Все части показаны. Получатель должен собрать файл.",
-                    color = Color(0xFF2E7D32),
-                    textAlign = TextAlign.Center
+                Spacer(modifier = Modifier.height(16.dp))
+
+                LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier.fillMaxWidth()
                 )
-            }
-        }
+                Text(
+                    "Часть ${minOf(currentIndex.coerceAtLeast(1), chunks.size)} из ${chunks.size} • " +
+                        "${(progress * 100).toInt()}%",
+                    style = MaterialTheme.typography.bodySmall
+                )
 
-        error?.let {
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(it, color = MaterialTheme.colorScheme.error)
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { playing = !playing }) {
+                        Text(if (playing) "Пауза" else "Продолжить")
+                    }
+                    if (finished) {
+                        Button(onClick = {
+                            headerText = null
+                            chunks = emptyList()
+                            fileName = null
+                            currentIndex = 0
+                            playing = false
+                            finished = false
+                        }) {
+                            Text("Заново")
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    "Скорость: ${speedMs.toInt()} мс на QR-код",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Slider(
+                    value = speedMs.toFloat(),
+                    onValueChange = { speedMs = it.toInt() },
+                    valueRange = 150f..2000f
+                )
+
+                if (finished) {
+                    Text(
+                        "Готово! Все части показаны. Получатель должен собрать файл.",
+                        color = Color(0xFF2E7D32),
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+
+            error?.let {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(it, color = MaterialTheme.colorScheme.error)
+            }
         }
     }
 }
