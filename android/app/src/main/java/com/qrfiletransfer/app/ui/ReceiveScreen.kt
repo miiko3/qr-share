@@ -10,6 +10,7 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
+import android.util.Size
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
@@ -17,8 +18,11 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -27,6 +31,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -34,6 +39,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,8 +57,11 @@ import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.common.InputImage
 import com.qrfiletransfer.app.QrProtocol
 import java.io.File
-import java.io.FileOutputStream
 import java.util.concurrent.Executors
+import kotlinx.coroutines.delay
+
+/** Статус сканирования для подсказок пользователю. */
+private enum class ScanStatus { Idle, Reading, Interrupted, Success }
 
 /** Собирает части одного файла, полученные из QR-кодов. */
 private class ReceiveSession(val header: QrProtocol.Header) {
@@ -100,16 +109,18 @@ fun ReceiveScreen(onBack: () -> Unit) {
     var progress by remember { mutableStateOf(0f) }
     var done by remember { mutableStateOf(0) }
     var total by remember { mutableStateOf(0) }
-    var info by remember { mutableStateOf("Наведите камеру на QR-коды отправителя") }
+    var info by remember { mutableStateOf("Наведите камеру на QR-код отправителя") }
     var savedName by remember { mutableStateOf<String?>(null) }
+    var savedLocation by remember { mutableStateOf("") }
     var failInfo by remember { mutableStateOf<String?>(null) }
+    var scanStatus by remember { mutableStateOf(ScanStatus.Idle) }
+    var lastActivity by remember { mutableStateOf(0L) }
 
     fun handle(text: String) {
         QrProtocol.parseHeader(text)?.let { h ->
             val s = sessions[h.sid]
             if (s == null) {
-                val ns = ReceiveSession(h)
-                sessions[h.sid] = ns
+                sessions[h.sid] = ReceiveSession(h)
             }
             mainHandler.post {
                 progress = 0f
@@ -118,6 +129,8 @@ fun ReceiveScreen(onBack: () -> Unit) {
                 info = "Получение: ${h.name} • ${h.total} частей"
                 failInfo = null
                 savedName = null
+                scanStatus = ScanStatus.Reading
+                lastActivity = System.currentTimeMillis()
             }
             return
         }
@@ -133,6 +146,8 @@ fun ReceiveScreen(onBack: () -> Unit) {
         mainHandler.post {
             done = s.count
             progress = s.count.toFloat() / s.header.total
+            scanStatus = ScanStatus.Reading
+            lastActivity = System.currentTimeMillis()
         }
 
         if (s.count == s.header.total) {
@@ -140,16 +155,38 @@ fun ReceiveScreen(onBack: () -> Unit) {
             if (QrProtocol.sha256Hex(full) != s.header.sha256) {
                 mainHandler.post { failInfo = "Контрольная сумма не совпала. Отправьте файл заново." }
             } else {
-                val saved = saveToDownloads(context, full, s.header.name, s.header.mime)
+                val saved = saveReceived(context, full, s.header.name, s.header.mime)
                 mainHandler.post {
                     if (saved != null) {
                         info = "Готово: ${s.header.name}"
                         savedName = s.header.name
+                        savedLocation = when {
+                            s.header.mime.startsWith("image/") -> "галерею (Фото)"
+                            s.header.mime.startsWith("video/") -> "галерею (Видео)"
+                            else -> "Загрузки"
+                        }
+                        scanStatus = ScanStatus.Success
                     } else {
                         failInfo = "Не удалось сохранить файл"
                     }
                 }
             }
+        }
+    }
+
+    // Если отправитель долго не даёт новый QR-код — помечаем чтение прерванным.
+    LaunchedEffect(total, done) {
+        while (true) {
+            if (total > 0 &&
+                done < total &&
+                scanStatus != ScanStatus.Success &&
+                scanStatus == ScanStatus.Reading
+            ) {
+                if (System.currentTimeMillis() - lastActivity > 2500) {
+                    scanStatus = ScanStatus.Interrupted
+                }
+            }
+            delay(500)
         }
     }
 
@@ -161,12 +198,64 @@ fun ReceiveScreen(onBack: () -> Unit) {
             Text("← Назад")
         }
 
-        Box(Modifier.fillMaxSize()) {
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val scanSide = (minOf(maxWidth, maxHeight) * 0.68f).coerceIn(200.dp, 340.dp)
+            val statusColor = when (scanStatus) {
+                ScanStatus.Idle -> Color.White
+                ScanStatus.Reading -> Color(0xFF4CAF50)
+                ScanStatus.Interrupted -> Color(0xFFFFC107)
+                ScanStatus.Success -> Color(0xFF4CAF50)
+            }
+            val statusText = when (scanStatus) {
+                ScanStatus.Idle -> "Наведите камеру на квадрат"
+                ScanStatus.Reading -> "Считывается: $done / $total"
+                ScanStatus.Interrupted -> "Считывание прервано — поднесите ближе"
+                ScanStatus.Success -> "Считывание прошло успешно — файл передан"
+            }
+
             if (cameraGranted) {
                 CameraPreview(
                     modifier = Modifier.fillMaxSize(),
                     onBarcode = ::handle
                 )
+
+                // Поле-квадрат для наведения сканера.
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(bottom = 160.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(scanSide)
+                            .border(3.dp, statusColor, RoundedCornerShape(20.dp))
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .size(scanSide * 0.92f)
+                                .border(1.dp, statusColor.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
+                        )
+                    }
+                }
+
+                // Статус поверх рамки.
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.TopCenter
+                ) {
+                    Text(
+                        text = statusText,
+                        color = statusColor,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .padding(top = 8.dp)
+                            .background(Color(0xB3000000), RoundedCornerShape(12.dp))
+                            .border(2.dp, statusColor, RoundedCornerShape(12.dp))
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
+                }
             } else {
                 Column(
                     modifier = Modifier
@@ -213,7 +302,7 @@ fun ReceiveScreen(onBack: () -> Unit) {
                 savedName?.let {
                     Spacer(modifier = Modifier.size(8.dp))
                     Text(
-                        "Файл сохранён в Загрузки: $it",
+                        "Файл сохранён в $savedLocation: $it",
                         color = Color(0xFF2E7D32),
                         textAlign = TextAlign.Center
                     )
@@ -238,6 +327,7 @@ private fun CameraPreview(
     val analysis = remember {
         ImageAnalysis.Builder()
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            .setTargetResolution(Size(1280, 720))
             .build()
     }
     val scanner = remember { BarcodeScanning.getClient() }
@@ -291,31 +381,57 @@ private fun CameraPreview(
     )
 }
 
-/** Сохраняет файл в «Загрузки» (Android 10+) или в папку приложения на старых версиях. */
+/**
+ * Сохраняет файл в галерею (фото/видео) или в «Загрузки».
+ * Android 10+ — через MediaStore, на старых версиях — в публичные папки.
+ */
 @Suppress("DEPRECATION")
-private fun saveToDownloads(context: Context, bytes: ByteArray, name: String, mime: String): Uri? {
+private fun saveReceived(context: Context, bytes: ByteArray, name: String, mime: String): Uri? {
     return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
         try {
-            val values = ContentValues().apply {
-                put(MediaStore.Downloads.DISPLAY_NAME, name)
-                put(MediaStore.Downloads.MIME_TYPE, mime)
+            val isImage = mime.startsWith("image/")
+            val isVideo = mime.startsWith("video/")
+            val collection = when {
+                isImage -> MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                isVideo -> MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                else -> MediaStore.Downloads.EXTERNAL_CONTENT_URI
             }
-            val uri = context.contentResolver
-                .insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return null
+            val relativePath = when {
+                isImage -> "Pictures/QRFileTransfer"
+                isVideo -> "Movies/QRFileTransfer"
+                else -> "Download/QRFileTransfer"
+            }
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                put(MediaStore.MediaColumns.MIME_TYPE, mime)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+            val uri = context.contentResolver.insert(collection, values) ?: return null
             context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) } ?: return null
+            values.clear()
+            values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+            context.contentResolver.update(uri, values, null, null)
             uri
         } catch (e: Exception) {
             null
         }
     } else {
         try {
+            val isImage = mime.startsWith("image/")
+            val isVideo = mime.startsWith("video/")
+            val subDir = when {
+                isImage -> Environment.DIRECTORY_PICTURES
+                isVideo -> Environment.DIRECTORY_MOVIES
+                else -> Environment.DIRECTORY_DOWNLOADS
+            }
             val dir = File(
-                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                Environment.getExternalStoragePublicDirectory(subDir),
                 "QRFileTransfer"
             )
             dir.mkdirs()
             val f = File(dir, name)
-            FileOutputStream(f).use { it.write(bytes) }
+            f.writeBytes(bytes)
             Uri.fromFile(f)
         } catch (e: Exception) {
             null
