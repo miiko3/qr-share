@@ -1,5 +1,6 @@
 name: QRFileTransfer
 options:
+  objectVersion: 70
   bundleIdPrefix: com.qrfiletransfer
   deploymentTarget:
     iOS: "16.0"
