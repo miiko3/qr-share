@@ -30,7 +30,7 @@ enum QrProtocol {
         guard !data.isEmpty else { return 0 }
         return data.withUnsafeBytes { buf -> UInt32 in
             guard let base = buf.bindMemory(to: UInt8.self).baseAddress else { return 0 }
-            return zlib.crc32(0, base, uInt(data.count))
+            return UInt32(zlib.crc32(0, base, uInt(data.count)))
         }
     }
 
