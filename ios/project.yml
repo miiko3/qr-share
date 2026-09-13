@@ -20,8 +20,8 @@ targets:
         NSCameraUsageDescription: "Нужен доступ к камере для сканирования QR-кодов"
         NSPhotoLibraryAddUsageDescription: "Полученные фото и видео сохраняются в галерею"
         CFBundleDisplayName: QR Share
-        CFBundleShortVersionString: "1.8.0"
-        CFBundleVersion: "21"
+        CFBundleShortVersionString: "1.9.0"
+        CFBundleVersion: "22"
         CFBundleAlternateIcons:
           frame-32:
             CFBundleIconFiles: [frame-32]

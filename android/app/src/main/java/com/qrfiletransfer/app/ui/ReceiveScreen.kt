@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.ContentValues
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -64,6 +65,9 @@ import com.google.zxing.common.HybridBinarizer
 import com.google.zxing.qrcode.QRCodeReader
 import com.qrfiletransfer.app.QrProtocol
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.Executors
 import kotlinx.coroutines.delay
 
@@ -131,7 +135,9 @@ fun ReceiveScreen(onBack: () -> Unit) {
     var lumaStd by remember { mutableStateOf(0) }
     var decodedCount by remember { mutableStateOf(0L) }
     var lastDecoded by remember { mutableStateOf<String?>(null) }
+    var debugInfo by remember { mutableStateOf<String?>(null) }
     val lastFrameTs = remember { java.util.concurrent.atomic.AtomicLong(0L) }
+    val wantCapture = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
 
     fun onFrames(mean: Int, std: Int, decoded: Boolean) {
         val now = SystemClock.elapsedRealtime()
@@ -286,7 +292,9 @@ fun ReceiveScreen(onBack: () -> Unit) {
                     onBarcode = ::handle,
                     onFrames = ::onFrames,
                     onDecoded = ::onDecoded,
-                    onError = { msg -> mainHandler.post { cameraError = msg } }
+                    onError = { msg -> mainHandler.post { cameraError = msg } },
+                    wantCapture = wantCapture,
+                    onCaptured = { path -> mainHandler.post { debugInfo = path } }
                 )
 
                 // Поле-квадрат для наведения сканера.
@@ -396,6 +404,21 @@ if (total > 0) {
                         )
                     }
                 }
+                if (frames > 0 && total == 0 && decodedCount == 0L) {
+                    Spacer(modifier = Modifier.size(4.dp))
+                    OutlinedButton(onClick = { wantCapture.set(true) }) {
+                        Text("Сохранить диагностический кадр")
+                    }
+                }
+                debugInfo?.let {
+                    Spacer(modifier = Modifier.size(2.dp))
+                    Text(
+                        it,
+                        color = Color(0xFF2E7D32),
+                        style = MaterialTheme.typography.labelSmall,
+                        textAlign = TextAlign.Center
+                    )
+                }
                 if (decodedCount > 0) {
                     Spacer(modifier = Modifier.size(4.dp))
                     Text(
@@ -444,7 +467,9 @@ private fun CameraPreview(
     onBarcode: (String) -> Unit,
     onFrames: (mean: Int, std: Int, decoded: Boolean) -> Unit,
     onDecoded: (String) -> Unit,
-    onError: (String) -> Unit
+    onError: (String) -> Unit,
+    wantCapture: java.util.concurrent.atomic.AtomicBoolean,
+    onCaptured: (String) -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -471,12 +496,20 @@ private fun CameraPreview(
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
                 analysis.setAnalyzer(analyzerExecutor) { image ->
+                    val wantSnapshot = wantCapture.getAndSet(false)
                     val result = try {
-                        processFrame(image)
+                        processFrame(image, wantSnapshot)
                     } catch (e: Exception) {
                         null
                     } finally {
                         image.close()
+                    }
+                    if (wantSnapshot) {
+                        val snapshot = result?.packed
+                        if (snapshot != null && result.width > 0) {
+                            val bmp = yuvToBitmap(snapshot, result.width, result.height)
+                            onCaptured(saveDebugFrame(context, bmp))
+                        }
                     }
                     if (result != null) {
                         onFrames(result.lumaMean, result.lumaStd, result.text != null)
@@ -591,15 +624,25 @@ private fun saveReceived(context: Context, bytes: ByteArray, name: String, mime:
     }
 }
 
-/** Результат обработки кадра: распознанный текст и метрики картинки. */
-private class FrameResult(val text: String?, val lumaMean: Int, val lumaStd: Int)
+/** Результат обработки кадра: распознанный текст, метрики и опционально Y-кадр. */
+private class FrameResult(
+    val text: String?,
+    val lumaMean: Int,
+    val lumaStd: Int,
+    val packed: ByteArray? = null,
+    val width: Int = 0,
+    val height: Int = 0
+)
 
 /**
  * Чистый ZXing-декодер по всему кадру (без ML Kit), с учётом поворота сенсора.
  * Заодно считает яркость и контраст кадра — чтобы отличать чёрный экран
  * от живого изображения без QR.
  */
-private fun processFrame(image: androidx.camera.core.ImageProxy): FrameResult {
+private fun processFrame(
+    image: androidx.camera.core.ImageProxy,
+    wantSnapshot: Boolean = false
+): FrameResult {
     val plane = image.planes[0]
     val buffer = plane.buffer
     val rowStride = plane.rowStride
@@ -659,13 +702,23 @@ private fun processFrame(image: androidx.camera.core.ImageProxy): FrameResult {
         try {
             val result = QRCodeReader().decode(BinaryBitmap(HybridBinarizer(source)), hints)
             if (result.text != null) {
-                return FrameResult(result.text, meanPct, stdPct)
+                return FrameResult(
+                    result.text, meanPct, stdPct,
+                    if (wantSnapshot) packed else null,
+                    if (wantSnapshot) width else 0,
+                    if (wantSnapshot) height else 0
+                )
             }
         } catch (e: Exception) {
             // поворот не подошёл — пробуем следующий
         }
     }
-    return FrameResult(null, meanPct, stdPct)
+    return FrameResult(
+        null, meanPct, stdPct,
+        if (wantSnapshot) packed else null,
+        if (wantSnapshot) width else 0,
+        if (wantSnapshot) height else 0
+    )
 }
 
 private fun rotatePacked(src: ByteArray, w: Int, h: Int, degrees: Int): Triple<ByteArray, Int, Int> {
@@ -699,5 +752,56 @@ private fun rotatePacked(src: ByteArray, w: Int, h: Int, degrees: Int): Triple<B
             }
             return Triple(out, h, w)
         }
+    }
+}
+
+/** Y-плоскость (градации серого) в ARGB-картинку для диагностического снимка. */
+private fun yuvToBitmap(y: ByteArray, width: Int, height: Int): Bitmap {
+    val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    val pixels = IntArray(width * height)
+    for (i in pixels.indices) {
+        val v = y[i].toInt() and 0xFF
+        pixels[i] = (0xFF shl 24) or (v shl 16) or (v shl 8) or v
+    }
+    bmp.setPixels(pixels, 0, width, 0, 0, width, height)
+    return bmp
+}
+
+/** Сохраняет PNG в «Загрузки/QRFileTransfer/debug» и возвращает путь для показа в UI. */
+@Suppress("DEPRECATION")
+private fun saveDebugFrame(context: Context, bmp: Bitmap): String {
+    return try {
+        val name = "QR_debug_" +
+            SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + ".png"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
+                put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/QRFileTransfer/debug")
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+            val uri = context.contentResolver.insert(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                values
+            ) ?: return "Не удалось сохранить кадр"
+            context.contentResolver.openOutputStream(uri)?.use {
+                bmp.compress(Bitmap.CompressFormat.PNG, 100, it)
+            }
+            values.clear()
+            values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+            context.contentResolver.update(uri, values, null, null)
+            "Кадр сохранён: Загрузки/QRFileTransfer/debug/$name"
+        } else {
+            val dir = File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                "QRFileTransfer/debug"
+            )
+            dir.mkdirs()
+            val f = File(dir, name)
+            f.outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            "Кадр сохранён: $dir/${f.name}"
+        }
+    } catch (e: Exception) {
+        "Не удалось сохранить кадр: ${e.message}"
     }
 }
