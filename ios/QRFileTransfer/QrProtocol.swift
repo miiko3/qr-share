@@ -16,7 +16,7 @@ import zlib
 enum QrProtocol {
     static let version = 1
     static let chunkRawSize = 800
-    static let maxFileSize: Int64 = 100 * 1024 * 1024
+    static let maxFileSize: Int64 = 99 * 1024 * 1024
 
     static func newSessionId() -> String {
         String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(16))

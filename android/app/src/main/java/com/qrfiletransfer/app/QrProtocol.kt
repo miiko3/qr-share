@@ -27,7 +27,7 @@ import java.util.zip.CRC32
 object QrProtocol {
     const val VERSION = 1
     const val CHUNK_RAW_SIZE = 800
-    const val MAX_FILE_SIZE = 100L * 1024 * 1024
+    const val MAX_FILE_SIZE = 99L * 1024 * 1024
 
     private const val TYPE_HEADER = "h"
     private const val TYPE_DATA = "d"

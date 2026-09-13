@@ -45,6 +45,15 @@ struct ContentView: View {
             .frame(maxWidth: 480)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .navigationTitle("Главная")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    NavigationLink {
+                        SettingsView()
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                }
+            }
             .task {
                 let local = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
                 if let tag = try? await ReleaseChecker.latestTag(),

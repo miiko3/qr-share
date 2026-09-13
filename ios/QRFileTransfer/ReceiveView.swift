@@ -39,6 +39,7 @@ private final class ReceiveSession {
 final class SessionStore: ObservableObject {
     @Published var done = 0
     @Published var total = 0
+    @Published var startedAt: Date?
     @Published var info = "Наведите камеру на QR-коды отправителя"
     @Published var savedName: String?
     @Published var savedURL: URL?
@@ -54,6 +55,10 @@ final class SessionStore: ObservableObject {
         queue.sync { [weak self] in
             guard let self else { return }
             if let header = parseHeader(text) {
+                if header.size > QrProtocol.maxFileSize {
+                    publish { self.failInfo = "Файл слишком большой" }
+                    return
+                }
                 if sessions[header.sid] == nil {
                     sessions[header.sid] = ReceiveSession(header: header)
                 }
@@ -63,6 +68,7 @@ final class SessionStore: ObservableObject {
                 publish {
                     self.done = 0
                     self.total = t
+                    self.startedAt = Date()
                     self.info = "Получение: \(n) • \(t) частей"
                     self.savedName = nil
                     self.savedURL = nil
@@ -158,8 +164,23 @@ final class SessionStore: ObservableObject {
 struct ReceiveView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var store = SessionStore()
+    @StateObject private var tilt = TiltMonitor()
     @State private var granted = false
     @State private var showPreview = false
+    @State private var now = Date()
+
+    private var etaText: String? {
+        guard let startedAt = store.startedAt, store.total > 0, store.done < store.total else {
+            return nil
+        }
+        let elapsed = now.timeIntervalSince(startedAt)
+        guard elapsed > 2 else { return nil }
+        let remaining = store.total - store.done
+        let rate = Double(store.done) / elapsed
+        guard rate > 0 else { return nil }
+        let seconds = Int(ceil(Double(remaining) / rate))
+        return seconds > 0 ? "Осталось ~\(seconds) c" : nil
+    }
 
     private var statusText: String {
         switch store.state {
@@ -233,8 +254,14 @@ struct ReceiveView: View {
                             total: Double(store.total)
                         )
                         .frame(maxWidth: 480)
-                        Text("Принято частей: \(store.done) / \(store.total)")
-                            .font(.caption)
+                        HStack(spacing: 8) {
+                            Text("Принято частей: \(store.done) / \(store.total)")
+                            if let eta = etaText {
+                                Text("• \(eta)")
+                                    .foregroundStyle(.green)
+                            }
+                        }
+                        .font(.caption)
                     }
                 }
                 .padding()
@@ -261,6 +288,17 @@ struct ReceiveView: View {
                     }
                 }
                 .padding(.top, 8)
+            }
+            .overlay(alignment: .top) {
+                if tilt.isTilted && (store.state == .idle || store.state == .reading) {
+                    Label("Держите телефон ровнее", systemImage: "iphone.and.arrow.forward")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(.orange.opacity(0.9), in: RoundedRectangle(cornerRadius: 12))
+                        .padding(.top, 84)
+                }
             }
 
             if store.failInfo != nil {
@@ -293,6 +331,17 @@ struct ReceiveView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             requestPermission()
+            tilt.start()
+        }
+        .onDisappear {
+            tilt.stop()
+        }
+        .task(id: "clock") {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                if Task.isCancelled { return }
+                now = Date()
+            }
         }
         .task(id: store.total) {
             guard store.total > 0, store.state != .success else { return }

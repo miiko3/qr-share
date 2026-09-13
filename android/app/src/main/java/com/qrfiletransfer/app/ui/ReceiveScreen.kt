@@ -159,6 +159,10 @@ fun ReceiveScreen(onBack: () -> Unit) {
     fun handle(text: String) {
         try {
             QrProtocol.parseHeader(text)?.let { h ->
+            if (h.size > QrProtocol.MAX_FILE_SIZE) {
+                mainHandler.post { failInfo = "Файл слишком большой" }
+                return
+            }
             val ns = synchronized(stateLock) {
                 sessions[h.sid] ?: ReceiveSession(h).also { sessions[h.sid] = it }
             }

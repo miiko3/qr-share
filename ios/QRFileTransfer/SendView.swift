@@ -30,7 +30,7 @@ struct SendView: View {
 
                 if qrTexts.isEmpty {
                     VStack(spacing: 12) {
-                        Text("Выберите, что отправить (до 100 МБ).\nПоднесите телефоны друг к другу.")
+                        Text("Выберите, что отправить (до 99 МБ).\nПоднесите телефоны друг к другу.")
                             .multilineTextAlignment(.center)
                             .foregroundStyle(.secondary)
                         PhotosPicker(
@@ -171,7 +171,7 @@ struct SendView: View {
             return
         }
         guard data.count <= QrProtocol.maxFileSize else {
-            error = "Файл больше 100 МБ"
+            error = "Файл слишком большой"
             return
         }
         let sid = QrProtocol.newSessionId()

@@ -71,7 +71,7 @@ fun SendScreen(onBack: () -> Unit) {
             val bytes = context.contentResolver.openInputStream(uri)?.readBytes()
                 ?: throw Exception("Не удалось прочитать файл")
             if (bytes.isEmpty()) throw Exception("Пустой файл")
-            if (bytes.size > QrProtocol.MAX_FILE_SIZE) throw Exception("Файл больше 100 МБ")
+            if (bytes.size > QrProtocol.MAX_FILE_SIZE) throw Exception("Файл слишком большой")
 
             val total = QrProtocol.chunkCount(bytes.size.toLong())
             val newSid = QrProtocol.newSessionId()

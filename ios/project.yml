@@ -20,8 +20,42 @@ targets:
         NSCameraUsageDescription: "Нужен доступ к камере для сканирования QR-кодов"
         NSPhotoLibraryAddUsageDescription: "Полученные фото и видео сохраняются в галерею"
         CFBundleDisplayName: QR Share
-        CFBundleShortVersionString: "1.7.0"
-        CFBundleVersion: "20"
+        CFBundleShortVersionString: "1.8.0"
+        CFBundleVersion: "21"
+        CFBundleAlternateIcons:
+          frame-32:
+            CFBundleIconFiles: [frame-32]
+            UIPrerenderedIcon: true
+          frame-33:
+            CFBundleIconFiles: [frame-33]
+            UIPrerenderedIcon: true
+          frame-34:
+            CFBundleIconFiles: [frame-34]
+            UIPrerenderedIcon: true
+          frame-35:
+            CFBundleIconFiles: [frame-35]
+            UIPrerenderedIcon: true
+          frame-36:
+            CFBundleIconFiles: [frame-36]
+            UIPrerenderedIcon: true
+          frame-37:
+            CFBundleIconFiles: [frame-37]
+            UIPrerenderedIcon: true
+          frame-38:
+            CFBundleIconFiles: [frame-38]
+            UIPrerenderedIcon: true
+          frame-39:
+            CFBundleIconFiles: [frame-39]
+            UIPrerenderedIcon: true
+          frame-40:
+            CFBundleIconFiles: [frame-40]
+            UIPrerenderedIcon: true
+          frame-41:
+            CFBundleIconFiles: [frame-41]
+            UIPrerenderedIcon: true
+          frame-42:
+            CFBundleIconFiles: [frame-42]
+            UIPrerenderedIcon: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
 schemes:
