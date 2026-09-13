@@ -127,6 +127,8 @@ fun ReceiveScreen(onBack: () -> Unit) {
     var lastActivity by remember { mutableStateOf(0L) }
     var cameraError by remember { mutableStateOf<String?>(null) }
     var frames by remember { mutableStateOf(0L) }
+    var decodedCount by remember { mutableStateOf(0L) }
+    var lastDecoded by remember { mutableStateOf<String?>(null) }
     val lastFrameTs = remember { java.util.concurrent.atomic.AtomicLong(0L) }
 
     fun onFrames() {
@@ -134,6 +136,13 @@ fun ReceiveScreen(onBack: () -> Unit) {
         if (now - lastFrameTs.get() > 400) {
             lastFrameTs.set(now)
             mainHandler.post { frames++ }
+        }
+    }
+
+    fun onDecoded(text: String) {
+        mainHandler.post {
+            decodedCount++
+            lastDecoded = text.take(56)
         }
     }
 
@@ -262,6 +271,7 @@ fun ReceiveScreen(onBack: () -> Unit) {
                     modifier = Modifier.fillMaxSize(),
                     onBarcode = ::handle,
                     onFrames = ::onFrames,
+                    onDecoded = ::onDecoded,
                     onError = { msg -> mainHandler.post { cameraError = msg } }
                 )
 
@@ -363,6 +373,22 @@ if (total > 0) {
                         style = MaterialTheme.typography.labelSmall
                     )
                 }
+                if (decodedCount > 0) {
+                    Spacer(modifier = Modifier.size(4.dp))
+                    Text(
+                        "Декодировано QR: $decodedCount",
+                        color = Color(0xFF1565C0),
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                    lastDecoded?.let {
+                        Spacer(modifier = Modifier.size(2.dp))
+                        Text(
+                            "Распознан текст: $it…",
+                            color = Color.Gray,
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                }
                 savedName?.let {
                     Spacer(modifier = Modifier.size(8.dp))
                     Text(
@@ -385,6 +411,7 @@ private fun CameraPreview(
     modifier: Modifier = Modifier,
     onBarcode: (String) -> Unit,
     onFrames: () -> Unit,
+    onDecoded: (String) -> Unit,
     onError: (String) -> Unit
 ) {
     val context = LocalContext.current
@@ -415,7 +442,10 @@ private fun CameraPreview(
                         image.close()
                     }
                     onFrames()
-                    if (!text.isNullOrEmpty()) onBarcode(text)
+                    if (!text.isNullOrEmpty()) {
+                        onDecoded(text)
+                        onBarcode(text)
+                    }
                 }
                 provider.unbindAll()
                 provider.bindToLifecycle(
@@ -504,7 +534,7 @@ private fun saveReceived(context: Context, bytes: ByteArray, name: String, mime:
     }
 }
 
-/** Чистый ZXing-декодер по всему кадру (без ML Kit). */
+/** Чистый ZXing-декодер по всему кадру (без ML Kit), с учётом поворота сенсора. */
 private fun decodeFrame(image: androidx.camera.core.ImageProxy): String? {
     return try {
         val plane = image.planes[0]
@@ -514,29 +544,84 @@ private fun decodeFrame(image: androidx.camera.core.ImageProxy): String? {
         val width = image.width
         val height = image.height
 
-        val yuv = ByteArray(rowStride * height)
-        buffer.rewind()
-        if (buffer.remaining() < yuv.size) return null
-        buffer.get(yuv)
-        if (pixelStride != 1) {
+        val packed = if (pixelStride == 1 && rowStride == width) {
+            val yuv = ByteArray(width * height)
+            buffer.rewind()
+            if (buffer.remaining() < yuv.size) return null
+            buffer.get(yuv)
+            yuv
+        } else {
+            val raw = ByteArray(rowStride * height)
+            buffer.rewind()
+            if (buffer.remaining() < raw.size) return null
+            buffer.get(raw)
+            val yuv = ByteArray(width * height)
             for (row in 0 until height) {
-                var col = 0
-                while (col < width) {
-                    yuv[row * rowStride + col] = yuv[row * rowStride + col * pixelStride]
-                    col++
+                val src = row * rowStride
+                val dst = row * width
+                for (col in 0 until width) {
+                    yuv[dst + col] = raw[src + col * pixelStride]
                 }
             }
+            yuv
         }
 
-        val source = PlanarYUVLuminanceSource(
-            yuv, rowStride, height, 0, 0, width, height, false
-        )
+        val rotation = image.imageInfo.rotationDegrees
         val hints = mapOf(
             DecodeHintType.CHARACTER_SET to "UTF-8",
             DecodeHintType.TRY_HARDER to true
         )
-        QRCodeReader().decode(BinaryBitmap(HybridBinarizer(source)), hints).text
+
+        // Пробуем по очереди повороты, начиная с указанного сенсором.
+        val order = listOf(rotation % 360, (rotation + 90) % 360, (rotation + 180) % 360, (rotation + 270) % 360)
+        val seen = HashSet<Int>()
+        for (r in order) {
+            if (!seen.add(r)) continue
+            val (rotated, rw, rh) = rotatePacked(packed, width, height, r)
+            val source = PlanarYUVLuminanceSource(rotated, rw, rh, 0, 0, rw, rh, false)
+            try {
+                val result = QRCodeReader().decode(BinaryBitmap(HybridBinarizer(source)), hints)
+                if (result.text != null) return result.text
+            } catch (e: Exception) {
+                // поворот не подошёл — пробуем следующий
+            }
+        }
+        null
     } catch (e: Exception) {
         null
+    }
+}
+
+private fun rotatePacked(src: ByteArray, w: Int, h: Int, degrees: Int): Triple<ByteArray, Int, Int> {
+    when (degrees) {
+        0 -> return Triple(src, w, h)
+        180 -> {
+            val out = ByteArray(src.size)
+            var si = src.size - 1
+            for (i in out.indices) out[i] = src[si--]
+            return Triple(out, w, h)
+        }
+        90 -> {
+            // Поворачиваем на 90° по часовой: результат шириной h и высотой w.
+            val out = ByteArray(src.size)
+            var k = 0
+            for (x in 0 until w) {
+                for (y in h - 1 downTo 0) {
+                    out[k++] = src[y * w + x]
+                }
+            }
+            return Triple(out, h, w)
+        }
+        else -> {
+            // 270° — против часовой.
+            val out = ByteArray(src.size)
+            var k = 0
+            for (x in w - 1 downTo 0) {
+                for (y in 0 until h) {
+                    out[k++] = src[y * w + x]
+                }
+            }
+            return Triple(out, h, w)
+        }
     }
 }
