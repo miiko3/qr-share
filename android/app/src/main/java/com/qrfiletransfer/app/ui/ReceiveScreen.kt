@@ -9,8 +9,8 @@ import android.os.Build
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.MediaStore
-import android.util.Size
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
@@ -125,6 +125,17 @@ fun ReceiveScreen(onBack: () -> Unit) {
     var failInfo by remember { mutableStateOf<String?>(null) }
     var scanStatus by remember { mutableStateOf(ScanStatus.Idle) }
     var lastActivity by remember { mutableStateOf(0L) }
+    var cameraError by remember { mutableStateOf<String?>(null) }
+    var frames by remember { mutableStateOf(0L) }
+    val lastFrameTs = remember { java.util.concurrent.atomic.AtomicLong(0L) }
+
+    fun onFrames() {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastFrameTs.get() > 400) {
+            lastFrameTs.set(now)
+            mainHandler.post { frames++ }
+        }
+    }
 
     fun handle(text: String) {
         try {
@@ -249,7 +260,9 @@ fun ReceiveScreen(onBack: () -> Unit) {
             if (cameraGranted) {
                 CameraPreview(
                     modifier = Modifier.fillMaxSize(),
-                    onBarcode = ::handle
+                    onBarcode = ::handle,
+                    onFrames = ::onFrames,
+                    onError = { msg -> mainHandler.post { cameraError = msg } }
                 )
 
                 // Поле-квадрат для наведения сканера.
@@ -330,13 +343,25 @@ fun ReceiveScreen(onBack: () -> Unit) {
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(info, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
-                if (total > 0) {
+if (total > 0) {
                     Spacer(modifier = Modifier.size(8.dp))
                     LinearProgressIndicator(
-                        progress = { progress.coerceIn(0f, 1f) },
+                        progress = { progress },
                         modifier = Modifier.fillMaxWidth()
                     )
                     Text("Принято частей: $done / $total", style = MaterialTheme.typography.bodySmall)
+                }
+                cameraError?.let {
+                    Spacer(modifier = Modifier.size(8.dp))
+                    Text(it, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+                }
+                if (frames > 0) {
+                    Spacer(modifier = Modifier.size(4.dp))
+                    Text(
+                        "Кадры камеры: $frames/с (проверка связи с камерой)",
+                        color = Color.Gray,
+                        style = MaterialTheme.typography.labelSmall
+                    )
                 }
                 savedName?.let {
                     Spacer(modifier = Modifier.size(8.dp))
@@ -358,7 +383,9 @@ fun ReceiveScreen(onBack: () -> Unit) {
 @Composable
 private fun CameraPreview(
     modifier: Modifier = Modifier,
-    onBarcode: (String) -> Unit
+    onBarcode: (String) -> Unit,
+    onFrames: () -> Unit,
+    onError: (String) -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -366,7 +393,6 @@ private fun CameraPreview(
     val analysis = remember {
         ImageAnalysis.Builder()
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-            .setTargetResolution(Size(1280, 720))
             .build()
     }
     val analyzerExecutor = remember { Executors.newSingleThreadExecutor() }
@@ -375,21 +401,22 @@ private fun CameraPreview(
         val providerFuture = ProcessCameraProvider.getInstance(context)
 
         providerFuture.addListener({
-            val provider = providerFuture.get()
-            val preview = Preview.Builder().build().also {
-                it.setSurfaceProvider(previewView.surfaceProvider)
-            }
-            analysis.setAnalyzer(analyzerExecutor) { image ->
-                val text = try {
-                    decodeFrame(image)
-                } catch (e: Exception) {
-                    null
-                } finally {
-                    image.close()
-                }
-                if (!text.isNullOrEmpty()) onBarcode(text)
-            }
             try {
+                val provider = providerFuture.get()
+                val preview = Preview.Builder().build().also {
+                    it.setSurfaceProvider(previewView.surfaceProvider)
+                }
+                analysis.setAnalyzer(analyzerExecutor) { image ->
+                    val text = try {
+                        decodeFrame(image)
+                    } catch (e: Exception) {
+                        null
+                    } finally {
+                        image.close()
+                    }
+                    onFrames()
+                    if (!text.isNullOrEmpty()) onBarcode(text)
+                }
                 provider.unbindAll()
                 provider.bindToLifecycle(
                     lifecycleOwner,
@@ -398,14 +425,18 @@ private fun CameraPreview(
                     analysis
                 )
             } catch (e: Exception) {
-                // камера недоступна
+                onError("Камера не запустилась: ${e.message ?: e.javaClass.simpleName}")
             }
         }, ContextCompat.getMainExecutor(context))
 
         onDispose {
             analysis.clearAnalyzer()
             analyzerExecutor.shutdown()
-            providerFuture.get().unbindAll()
+            try {
+                providerFuture.get().unbindAll()
+            } catch (e: Exception) {
+                // камера и так освобождена
+            }
         }
     }
 
