@@ -272,9 +272,15 @@ struct ReceiveView: View {
             if let name = store.savedName {
                 Text(store.photoSaved ? "Файл сохранён в галерею Фото: \(name)" : "Файл сохранён: \(name)")
                     .foregroundStyle(.green)
-                    .font(.subheadline)
+                    .font(.subheadline.weight(.semibold))
                     .multilineTextAlignment(.center)
                 if let url = store.savedURL {
+                    Button {
+                        showPreview = true
+                    } label: {
+                        Label("Открыть полученный файл", systemImage: "eye")
+                    }
+                    .buttonStyle(.bordered)
                     ShareLink(item: url) {
                         Label("Сохранить / Поделиться", systemImage: "square.and.arrow.up")
                     }
@@ -297,7 +303,7 @@ struct ReceiveView: View {
             }
         }
         .onChange(of: store.savedURL) { url in
-            if url != nil { showPreview = true }
+            // Файл получен — ничего не открываем автоматически, только уведомление выше.
         }
         .sheet(isPresented: $showPreview) {
             if let url = store.savedURL {

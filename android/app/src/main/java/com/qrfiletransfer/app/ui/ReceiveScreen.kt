@@ -3,20 +3,18 @@ package com.qrfiletransfer.app.ui
 import android.Manifest
 import android.content.ContentValues
 import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
-import android.os.SystemClock
 import android.provider.MediaStore
+import android.util.Size
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -34,7 +32,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -55,8 +57,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import com.google.mlkit.vision.barcode.BarcodeScanning
-import com.google.mlkit.vision.common.InputImage
 import com.google.zxing.BinaryBitmap
 import com.google.zxing.DecodeHintType
 import com.google.zxing.PlanarYUVLuminanceSource
@@ -69,10 +69,6 @@ import kotlinx.coroutines.delay
 
 /** Статус сканирования для подсказок пользователю. */
 private enum class ScanStatus { Idle, Reading, Interrupted, Success }
-
-/** Ограничитель частоты запасного декодера (не чаще раза в 300 мс). */
-@Volatile
-private var lastZxingTs = 0L
 
 /** Собирает части одного файла, полученные из QR-кодов. */
 private class ReceiveSession(val header: QrProtocol.Header) {
@@ -194,7 +190,6 @@ fun ReceiveScreen(onBack: () -> Unit) {
                             else -> "Загрузки"
                         }
                         scanStatus = ScanStatus.Success
-                        openSavedFile(context, saved)
                     } else {
                         failInfo = "Не удалось сохранить файл"
                     }
@@ -227,7 +222,13 @@ fun ReceiveScreen(onBack: () -> Unit) {
             onClick = onBack,
             modifier = Modifier.padding(16.dp)
         ) {
-            Text("← Назад")
+            Icon(
+                Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.size(4.dp))
+            Text("Назад")
         }
 
         BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -303,6 +304,12 @@ fun ReceiveScreen(onBack: () -> Unit) {
                     )
                     Spacer(modifier = Modifier.size(16.dp))
                     Button(onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }) {
+                        Icon(
+                            Icons.Filled.PhotoCamera,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.size(6.dp))
                         Text("Разрешить доступ к камере")
                     }
                     Spacer(modifier = Modifier.height(8.dp))
@@ -359,9 +366,9 @@ private fun CameraPreview(
     val analysis = remember {
         ImageAnalysis.Builder()
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            .setTargetResolution(Size(1280, 720))
             .build()
     }
-    val scanner = remember { BarcodeScanning.getClient() }
     val analyzerExecutor = remember { Executors.newSingleThreadExecutor() }
 
     DisposableEffect(lifecycleOwner) {
@@ -373,31 +380,14 @@ private fun CameraPreview(
                 it.setSurfaceProvider(previewView.surfaceProvider)
             }
             analysis.setAnalyzer(analyzerExecutor) { image ->
-                val mediaImage = image.image ?: run {
-                    image.close()
-                    return@setAnalyzer
-                }
-                val input = InputImage.fromMediaImage(mediaImage, image.imageInfo.rotationDegrees)
-                try {
-                    scanner.process(input)
-                        .addOnSuccessListener { barcodes ->
-                            if (barcodes.isEmpty()) {
-                                // ML Kit не увидел QR — пробуем запасной декодер (не чаще раза в 300 мс).
-                                val now = SystemClock.elapsedRealtime()
-                                if (now - lastZxingTs > 300) {
-                                    lastZxingTs = now
-                                    zxingDecode(image)?.let(onBarcode)
-                                }
-                            } else {
-                                for (b in barcodes) {
-                                    b.rawValue?.let(onBarcode)
-                                }
-                            }
-                        }
-                        .addOnCompleteListener { image.close() }
+                val text = try {
+                    decodeFrame(image)
                 } catch (e: Exception) {
+                    null
+                } finally {
                     image.close()
                 }
+                if (!text.isNullOrEmpty()) onBarcode(text)
             }
             try {
                 provider.unbindAll()
@@ -483,8 +473,8 @@ private fun saveReceived(context: Context, bytes: ByteArray, name: String, mime:
     }
 }
 
-/** Запасной декодер (ZXing) по центральной области кадра — когда ML Kit ничего не нашёл. */
-private fun zxingDecode(image: ImageProxy): String? {
+/** Чистый ZXing-декодер по всему кадру (без ML Kit). */
+private fun decodeFrame(image: androidx.camera.core.ImageProxy): String? {
     return try {
         val plane = image.planes[0]
         val buffer = plane.buffer
@@ -494,8 +484,8 @@ private fun zxingDecode(image: ImageProxy): String? {
         val height = image.height
 
         val yuv = ByteArray(rowStride * height)
-        if (buffer.remaining() < rowStride * height) return null
         buffer.rewind()
+        if (buffer.remaining() < yuv.size) return null
         buffer.get(yuv)
         if (pixelStride != 1) {
             for (row in 0 until height) {
@@ -507,33 +497,15 @@ private fun zxingDecode(image: ImageProxy): String? {
             }
         }
 
-        val cropW = (width * 0.6).toInt().coerceAtLeast(64)
-        val cropH = (height * 0.6).toInt().coerceAtLeast(64)
-        val left = (width - cropW) / 2
-        val top = (height - cropH) / 2
-
         val source = PlanarYUVLuminanceSource(
-            yuv, rowStride, height, left, top, cropW, cropH, false
+            yuv, rowStride, height, 0, 0, width, height, false
         )
-        val result = QRCodeReader().decode(
-            BinaryBitmap(HybridBinarizer(source)),
-            mapOf(DecodeHintType.CHARACTER_SET to "UTF-8")
+        val hints = mapOf(
+            DecodeHintType.CHARACTER_SET to "UTF-8",
+            DecodeHintType.TRY_HARDER to true
         )
-        result.text
+        QRCodeReader().decode(BinaryBitmap(HybridBinarizer(source)), hints).text
     } catch (e: Exception) {
         null
-    }
-}
-
-/** Открывает полученный файл в подходящем приложении (галерея/просмотрщик). */
-private fun openSavedFile(context: Context, uri: Uri) {
-    try {
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, context.contentResolver.getType(uri) ?: "*/*")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        context.startActivity(intent)
-    } catch (e: Exception) {
-        // нет приложения-просмотрщика — достаточно сообщения об успехе
     }
 }

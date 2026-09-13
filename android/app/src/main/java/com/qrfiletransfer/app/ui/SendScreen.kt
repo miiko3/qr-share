@@ -18,11 +18,20 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.outlined.PhotoLibrary
+import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -155,7 +164,15 @@ fun SendScreen(onBack: () -> Unit) {
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                OutlinedButton(onClick = onBack) { Text("← Назад") }
+                OutlinedButton(onClick = onBack) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.size(4.dp))
+                    Text("Назад")
+                }
                 Spacer(modifier = Modifier.weight(1f))
                 Text("Отправка", style = MaterialTheme.typography.headlineSmall)
                 Spacer(modifier = Modifier.weight(1f))
@@ -178,6 +195,12 @@ fun SendScreen(onBack: () -> Unit) {
                         onClick = { galleryPhotoPicker.launch("image/*") },
                         modifier = Modifier.fillMaxWidth()
                     ) {
+                        Icon(
+                            Icons.Outlined.PhotoLibrary,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.size(6.dp))
                         Text("Фото из галереи")
                     }
                     Spacer(modifier = Modifier.height(8.dp))
@@ -185,6 +208,12 @@ fun SendScreen(onBack: () -> Unit) {
                         onClick = { galleryVideoPicker.launch("video/*") },
                         modifier = Modifier.fillMaxWidth()
                     ) {
+                        Icon(
+                            Icons.Outlined.VideoLibrary,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.size(6.dp))
                         Text("Видео из галереи")
                     }
                     Spacer(modifier = Modifier.height(8.dp))
@@ -192,6 +221,12 @@ fun SendScreen(onBack: () -> Unit) {
                         onClick = { filePicker.launch(arrayOf("*/*")) },
                         modifier = Modifier.fillMaxWidth()
                     ) {
+                        Icon(
+                            Icons.Outlined.FolderOpen,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.size(6.dp))
                         Text("Файлы (документы, музыка и др.)")
                     }
                 }
@@ -225,6 +260,12 @@ fun SendScreen(onBack: () -> Unit) {
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = { playing = !playing }) {
+                        Icon(
+                            if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.size(6.dp))
                         Text(if (playing) "Пауза" else "Продолжить")
                     }
                     if (finished) {
@@ -236,6 +277,12 @@ fun SendScreen(onBack: () -> Unit) {
                             playing = false
                             finished = false
                         }) {
+                            Icon(
+                                Icons.Filled.Refresh,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.size(6.dp))
                             Text("Заново")
                         }
                     }

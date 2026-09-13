@@ -12,8 +12,8 @@ android {
         applicationId = "com.qrfiletransfer.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 16
-        versionName = "1.5.1"
+        versionCode = 17
+        versionName = "1.6.0"
     }
 
     buildTypes {
@@ -48,12 +48,12 @@ dependencies {
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.material3)
+    implementation(libs.compose.material.icons.extended)
     implementation(libs.activity.compose)
     implementation(libs.lifecycle.runtime)
     implementation(libs.camera.core)
     implementation(libs.camera.camera2)
     implementation(libs.camera.lifecycle)
     implementation(libs.camera.view)
-    implementation(libs.mlkit.barcode)
     implementation(libs.zxing.core)
 }
