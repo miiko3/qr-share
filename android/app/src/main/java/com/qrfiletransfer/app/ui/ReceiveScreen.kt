@@ -127,15 +127,25 @@ fun ReceiveScreen(onBack: () -> Unit) {
     var lastActivity by remember { mutableStateOf(0L) }
     var cameraError by remember { mutableStateOf<String?>(null) }
     var frames by remember { mutableStateOf(0L) }
+    var lumaMean by remember { mutableStateOf(0) }
+    var lumaStd by remember { mutableStateOf(0) }
     var decodedCount by remember { mutableStateOf(0L) }
     var lastDecoded by remember { mutableStateOf<String?>(null) }
     val lastFrameTs = remember { java.util.concurrent.atomic.AtomicLong(0L) }
 
-    fun onFrames() {
+    fun onFrames(mean: Int, std: Int, decoded: Boolean) {
         val now = SystemClock.elapsedRealtime()
+        if (decoded) {
+            lastFrameTs.set(now)
+            return
+        }
         if (now - lastFrameTs.get() > 400) {
             lastFrameTs.set(now)
-            mainHandler.post { frames++ }
+            mainHandler.post {
+                frames++
+                lumaMean = mean
+                lumaStd = std
+            }
         }
     }
 
@@ -368,10 +378,19 @@ if (total > 0) {
                 if (frames > 0) {
                     Spacer(modifier = Modifier.size(4.dp))
                     Text(
-                        "Кадры камеры: $frames/с (проверка связи с камерой)",
-                        color = Color.Gray,
+                        "Кадры камеры: $frames/с • яркость: $lumaMean% • контраст: $lumaStd",
+                        color = if (lumaStd < 6) MaterialTheme.colorScheme.error else Color.Gray,
                         style = MaterialTheme.typography.labelSmall
                     )
+                    if (lumaStd < 6) {
+                        Spacer(modifier = Modifier.size(2.dp))
+                        Text(
+                            "Камера передаёт пустые/тёмные кадры — preview чёрный. Проверьте, не занята ли камера другим приложением.",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.labelSmall,
+                            textAlign = TextAlign.Center
+                        )
+                    }
                 }
                 if (decodedCount > 0) {
                     Spacer(modifier = Modifier.size(4.dp))
@@ -388,6 +407,15 @@ if (total > 0) {
                             style = MaterialTheme.typography.labelSmall
                         )
                     }
+                }
+                if (frames > 0 && total == 0) {
+                    Spacer(modifier = Modifier.size(2.dp))
+                    Text(
+                        "QR пока не найден. Держите телефоны в 10–20 см друг от друга, QR должен занимать почти всё поле кадра. Обновите фокус, коснувшись экрана.",
+                        color = Color.Gray,
+                        style = MaterialTheme.typography.labelSmall,
+                        textAlign = TextAlign.Center
+                    )
                 }
                 savedName?.let {
                     Spacer(modifier = Modifier.size(8.dp))
@@ -410,13 +438,18 @@ if (total > 0) {
 private fun CameraPreview(
     modifier: Modifier = Modifier,
     onBarcode: (String) -> Unit,
-    onFrames: () -> Unit,
+    onFrames: (mean: Int, std: Int, decoded: Boolean) -> Unit,
     onDecoded: (String) -> Unit,
     onError: (String) -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val previewView = remember { PreviewView(context) }
+    val previewView = remember {
+        PreviewView(context).also {
+            // COMPATIBLE (TextureView) надёжнее на ряде устройств, где SurfaceView даёт чёрный экран.
+            it.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+        }
+    }
     val analysis = remember {
         ImageAnalysis.Builder()
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
@@ -434,26 +467,46 @@ private fun CameraPreview(
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
                 analysis.setAnalyzer(analyzerExecutor) { image ->
-                    val text = try {
-                        decodeFrame(image)
+                    val result = try {
+                        processFrame(image)
                     } catch (e: Exception) {
                         null
                     } finally {
                         image.close()
                     }
-                    onFrames()
-                    if (!text.isNullOrEmpty()) {
-                        onDecoded(text)
-                        onBarcode(text)
+                    if (result != null) {
+                        onFrames(result.lumaMean, result.lumaStd, result.text != null)
+                        if (result.text != null) {
+                            onDecoded(result.text)
+                            onBarcode(result.text)
+                        }
                     }
                 }
                 provider.unbindAll()
-                provider.bindToLifecycle(
+                val camera = provider.bindToLifecycle(
                     lifecycleOwner,
                     CameraSelector.DEFAULT_BACK_CAMERA,
                     preview,
                     analysis
                 )
+
+                // Фокус по нажатию на предпросмотр.
+                previewView.setOnTouchListener { _, event ->
+                    if (event.action == android.view.MotionEvent.ACTION_UP) {
+                        val factory = androidx.camera.core.SurfaceOrientedMeteringPointFactory(
+                            previewView.width.toFloat(),
+                            previewView.height.toFloat()
+                        )
+                        val action = androidx.camera.core.FocusMeteringAction.Builder(
+                            factory.createPoint(event.x, event.y),
+                            androidx.camera.core.FocusMeteringAction.FLAG_AF
+                        )
+                            .setAutoCancelDuration(1500L, java.util.concurrent.TimeUnit.MILLISECONDS)
+                            .build()
+                        camera.cameraControl.startFocusAndMetering(action)
+                    }
+                    true
+                }
             } catch (e: Exception) {
                 onError("Камера не запустилась: ${e.message ?: e.javaClass.simpleName}")
             }
@@ -534,62 +587,81 @@ private fun saveReceived(context: Context, bytes: ByteArray, name: String, mime:
     }
 }
 
-/** Чистый ZXing-декодер по всему кадру (без ML Kit), с учётом поворота сенсора. */
-private fun decodeFrame(image: androidx.camera.core.ImageProxy): String? {
-    return try {
-        val plane = image.planes[0]
-        val buffer = plane.buffer
-        val rowStride = plane.rowStride
-        val pixelStride = plane.pixelStride
-        val width = image.width
-        val height = image.height
+/** Результат обработки кадра: распознанный текст и метрики картинки. */
+private class FrameResult(val text: String?, val lumaMean: Int, val lumaStd: Int)
 
-        val packed = if (pixelStride == 1 && rowStride == width) {
-            val yuv = ByteArray(width * height)
-            buffer.rewind()
-            if (buffer.remaining() < yuv.size) return null
-            buffer.get(yuv)
-            yuv
-        } else {
-            val raw = ByteArray(rowStride * height)
-            buffer.rewind()
-            if (buffer.remaining() < raw.size) return null
-            buffer.get(raw)
-            val yuv = ByteArray(width * height)
-            for (row in 0 until height) {
-                val src = row * rowStride
-                val dst = row * width
-                for (col in 0 until width) {
-                    yuv[dst + col] = raw[src + col * pixelStride]
-                }
-            }
-            yuv
-        }
+/**
+ * Чистый ZXing-декодер по всему кадру (без ML Kit), с учётом поворота сенсора.
+ * Заодно считает яркость и контраст кадра — чтобы отличать чёрный экран
+ * от живого изображения без QR.
+ */
+private fun processFrame(image: androidx.camera.core.ImageProxy): FrameResult {
+    val plane = image.planes[0]
+    val buffer = plane.buffer
+    val rowStride = plane.rowStride
+    val pixelStride = plane.pixelStride
+    val width = image.width
+    val height = image.height
 
-        val rotation = image.imageInfo.rotationDegrees
-        val hints = mapOf(
-            DecodeHintType.CHARACTER_SET to "UTF-8",
-            DecodeHintType.TRY_HARDER to true
-        )
-
-        // Пробуем по очереди повороты, начиная с указанного сенсором.
-        val order = listOf(rotation % 360, (rotation + 90) % 360, (rotation + 180) % 360, (rotation + 270) % 360)
-        val seen = HashSet<Int>()
-        for (r in order) {
-            if (!seen.add(r)) continue
-            val (rotated, rw, rh) = rotatePacked(packed, width, height, r)
-            val source = PlanarYUVLuminanceSource(rotated, rw, rh, 0, 0, rw, rh, false)
-            try {
-                val result = QRCodeReader().decode(BinaryBitmap(HybridBinarizer(source)), hints)
-                if (result.text != null) return result.text
-            } catch (e: Exception) {
-                // поворот не подошёл — пробуем следующий
+    val packed = if (pixelStride == 1 && rowStride == width) {
+        val yuv = ByteArray(width * height)
+        buffer.rewind()
+        if (buffer.remaining() < yuv.size) return FrameResult(null, 0, 0)
+        buffer.get(yuv)
+        yuv
+    } else {
+        val raw = ByteArray(rowStride * height)
+        buffer.rewind()
+        if (buffer.remaining() < raw.size) return FrameResult(null, 0, 0)
+        buffer.get(raw)
+        val yuv = ByteArray(width * height)
+        for (row in 0 until height) {
+            val src = row * rowStride
+            val dst = row * width
+            for (col in 0 until width) {
+                yuv[dst + col] = raw[src + col * pixelStride]
             }
         }
-        null
-    } catch (e: Exception) {
-        null
+        yuv
     }
+
+    var sum = 0L
+    var sumSq = 0L
+    for (i in packed.indices) {
+        val v = packed[i].toInt() and 0xFF
+        sum += v
+        sumSq += v.toLong() * v
+    }
+    val n = packed.size
+    val mean = sum.toDouble() / n
+    val variance = (sumSq.toDouble() / n) - mean * mean
+    val std = (Math.sqrt(variance.coerceAtLeast(0.0))).toInt()
+    val meanPct = ((mean / 2.5599).toInt()).coerceIn(0, 100)
+    val stdPct = ((std / 2.5599).toInt()).coerceIn(0, 100)
+
+    val rotation = image.imageInfo.rotationDegrees
+    val hints = mapOf(
+        DecodeHintType.CHARACTER_SET to "UTF-8",
+        DecodeHintType.TRY_HARDER to true
+    )
+
+    // Пробуем по очереди повороты, начиная с указанного сенсором.
+    val order = listOf(rotation % 360, (rotation + 90) % 360, (rotation + 180) % 360, (rotation + 270) % 360)
+    val seen = HashSet<Int>()
+    for (r in order) {
+        if (!seen.add(r)) continue
+        val (rotated, rw, rh) = rotatePacked(packed, width, height, r)
+        val source = PlanarYUVLuminanceSource(rotated, rw, rh, 0, 0, rw, rh, false)
+        try {
+            val result = QRCodeReader().decode(BinaryBitmap(HybridBinarizer(source)), hints)
+            if (result.text != null) {
+                return FrameResult(result.text, meanPct, stdPct)
+            }
+        } catch (e: Exception) {
+            // поворот не подошёл — пробуем следующий
+        }
+    }
+    return FrameResult(null, meanPct, stdPct)
 }
 
 private fun rotatePacked(src: ByteArray, w: Int, h: Int, degrees: Int): Triple<ByteArray, Int, Int> {
